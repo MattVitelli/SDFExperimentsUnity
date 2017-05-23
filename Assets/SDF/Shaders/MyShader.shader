@@ -18,6 +18,7 @@ Shader "Custom/MyShader"
 		_giScaleFactor("GI Scale", Float) = 50
 		_ambientStrength("Ambient Strength", Float) = 0.5
 		_skyColor("Sky Color", Color) = (1,1,1,1)
+		_directColor("Direct Color", Color) = (1,1,1,1)
 	}
 	SubShader
 	{
@@ -64,8 +65,9 @@ Shader "Custom/MyShader"
 			uniform float4 _skyColor;
 			uniform float _giScaleFactor;
 			uniform float _directStrength;
+			uniform float4 _directColor;
 			uniform float _ambientStrength;
-			#define _SampleCountGI 32
+			#define _SampleCountGI 128
 
 			float sampleSDF(float3 wp)
 			{
@@ -167,7 +169,7 @@ Shader "Custom/MyShader"
 			float GradientNoise(float3 uvw)
 			{
 				uvw = floor(uvw *_giScaleFactor);
-				float f = dot(float3(0.06711056f, 0.00583715f, 0.00483715f), uvw);
+				float f = dot(float3(0.006711056f, 0.00583715f, 0.00483715f), uvw);
 				return frac(52.9829189f * frac(f));
 			}
 
@@ -175,10 +177,11 @@ Shader "Custom/MyShader"
 			float3 PickSamplePoint(float3 p, float3 n, float3 t, float3 b, float index, out float cosTheta)
 			{
 				// Uniformaly distributed points on a unit sphere http://goo.gl/X2F1Ho
-				float gn = GradientNoise(p);
-				float u = frac(UVRandom(0, index) + gn);// *2 - 1;
-				float theta = (UVRandom(1, index) + gn) * UNITY_PI * 2;
-
+				//float gn = GradientNoise(p);
+				//float u = frac(UVRandom(0, index) + gn);// *2 - 1;
+				//float theta = (UVRandom(1, index) + gn) * UNITY_PI * 2;
+				float u = (index / sqrt(_SampleCountGI)) / sqrt(_SampleCountGI);
+				float theta = UNITY_PI * 2.0 * (index % sqrt(_SampleCountGI)) / sqrt(_SampleCountGI);
 				float3 v = float3(CosSin(theta) * sqrt(1 - u * u), u).xzy;
 				float3 result = normalize(v.x*b + v.y*n + v.z*t);
 				cosTheta = u;
@@ -191,8 +194,9 @@ Shader "Custom/MyShader"
 				float3 wp = worldPoint(rO, rD, 0.01, 3.0, attrib);
 				float3 wn = worldNormal(wp);
 				float d = sampleSDF(wp);
-				float directLight = _directStrength*worldShadow(wp, normalize(L*_invDims), 0.01, 5.0) *saturate(dot(wn, L));
+				float4 directLight = _directColor*_directStrength*worldShadow(wp, normalize(L*_invDims), 0.01, 5.0) *saturate(dot(wn, L));
 				float indirectLight = _ambientStrength*saturate(pow(d, _aoCoeff));
+				//float4 indirectLight = worldLighting2(wp, wn, L);
 				//if we were a more complex GI system,
 				//we'd do another recursive call in place of the ambient term
 				//e.g. indirectLight = worldLighting(wp, wn, L);
@@ -215,7 +219,7 @@ Shader "Custom/MyShader"
 					indirectLight += worldColor(sampPoint, n, L) * cosTheta;
 				}
 				indirectLight *= sampleDenom;
-				float directLight = _directStrength*worldShadow(wp, normalize(L*_invDims), 0.01, 5.0) * saturate(dot(wn, L));
+				float4 directLight = _directColor*_directStrength*worldShadow(wp, normalize(L*_invDims), 0.01, 5.0) * saturate(dot(wn, L));
 				return directLight + indirectLight;
 			}
 
@@ -223,7 +227,7 @@ Shader "Custom/MyShader"
 			{
 				float2 uv = i.uv;
 				float3 N = i.normal;
-				float3 uv3 = i.cubeUV;// +N * _invDims;
+				float3 uv3 = i.cubeUV +N * _invDims;
 				float3 L = -normalize(_lightDir.xyz);
 				float4 col = worldLighting(uv3, N, L);
 				return col;
