@@ -1,0 +1,59 @@
+﻿// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel SDFInit
+
+// Create a RenderTexture with enableRandomWrite flag and set it
+// with cs.SetTexture
+Texture2D<float4> Heightmap;
+RWTexture2D<float4> Result;
+RWTexture2D<float4> PrevResult;
+
+uniform int _width;
+uniform int _height;
+uniform int _depth;
+uniform int _texWidth;
+uniform int _texHeight;
+uniform float _infinity;
+uniform int _cx;
+uniform int _cy;
+uniform int _cz;
+uniform int _dx;
+uniform int _dy;
+uniform int _dz;
+
+[numthreads(32,32,1)]
+void SDFInit(uint3 id : SV_DispatchThreadID)
+{
+	// TODO: insert actual code here
+	uint texIdx = id.x + id.y * _texWidth;
+	uint3 cellIdx = uint3(texIdx % _width, (texIdx / _width) % _height, (texIdx / (_width * _height)));
+	//Result[id.xy] = float4((float)cellIdx.x / _width, (float)cellIdx.y / _height, (float)cellIdx.z / _depth, 1.0);
+	if (texIdx > _width*_height*_depth)
+	{
+		Result[id.xy] = 0;
+	}
+	else
+	{
+		float3 invRecip = 1.0 / float3(_width, _height, _depth);
+		float3 cellIdxNormalized = float3(cellIdx) * invRecip;
+		if (cellIdxNormalized.y < Heightmap[cellIdx.xz].x)
+		{
+			Result[id.xy] = 0;
+		}
+		else
+		{
+			uint2 heightmapSamp = (0, 0);
+			float3 sampNormalized = float3(heightmapSamp.x, 0, heightmapSamp.y)* invRecip;
+			float minVal = 1000;// 3.01;// sqrt(3.01);// _infinity;
+			for (heightmapSamp.y = 0; heightmapSamp.y < _depth; heightmapSamp.y++, sampNormalized.z += invRecip.z)
+			{
+				for (heightmapSamp.x = 0, sampNormalized.x = 0; heightmapSamp.x < _width; heightmapSamp.x++, sampNormalized.x += invRecip.x)
+				{
+					sampNormalized.y = Heightmap[heightmapSamp];
+					float3 delta = sampNormalized - cellIdxNormalized;
+					minVal = min(minVal, dot(delta, delta));
+				}
+			}
+			Result[id.xy] = sqrt(minVal);
+		}
+	}
+}

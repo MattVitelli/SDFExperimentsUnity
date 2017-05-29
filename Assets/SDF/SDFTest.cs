@@ -8,9 +8,14 @@ public class SDFTest : MonoBehaviour {
     public Material sdfMaterial;
     public Light sun;
     public Transform worldRoot;
+    public int horizontalResolution = 256;
+    public int verticalResolution = 128;
+    public bool useComputeShaders = false;
+    public ComputeShader computeShader;
 
 	// Use this for initialization
 	void Start () {
+        sdfMaterial = Instantiate(sdfMaterial);
         BuildSDFMap();
     }
 
@@ -48,7 +53,7 @@ public class SDFTest : MonoBehaviour {
         cam.transform.LookAt(center, Vector3.forward);
         cam.nearClipPlane = eps;
         cam.farClipPlane = extent.y * 2;
-        cam.targetTexture = new RenderTexture(256, 256, 24, RenderTextureFormat.ARGBFloat);
+        cam.targetTexture = new RenderTexture(horizontalResolution, horizontalResolution, 24, RenderTextureFormat.ARGBFloat);
         cam.backgroundColor = new Color(0, 0, 0, 0);
         Shader shader = Shader.Find("Custom/GenerateHeightmap");
         Shader.SetGlobalVector(Shader.PropertyToID("_MinBounds"), minPt);
@@ -56,10 +61,11 @@ public class SDFTest : MonoBehaviour {
         cam.RenderWithShader(shader, string.Empty);
 
         RenderTexture src = cam.targetTexture;
-        Texture2D newTex = new Texture2D(256, 256, TextureFormat.RGBAFloat, false);
+        Texture2D newTex = new Texture2D(horizontalResolution, horizontalResolution, TextureFormat.RGBAFloat, false);
         RenderTexture old = RenderTexture.active;
         RenderTexture.active = src;
         newTex.ReadPixels(new Rect(0, 0, src.width, src.height), 0, 0);
+        newTex.Apply();
         RenderTexture.active = old;
 
         Image25D img = new Image25D();
@@ -84,9 +90,16 @@ public class SDFTest : MonoBehaviour {
         reassignMaterials();
         Image25D hm2D = generateHeightMap();
         Texture2D hm = hm2D.Image;
-        float[] heights = MakeSDF.ExtractHeightmap(hm);
-        sdfImage = MakeSDF.BuildSDF3D(heights, heightmap.width, 128, heightmap.height);
 
+        if (computeShader != null && useComputeShaders)
+        {
+            sdfImage = MakeSDF.BuildSDF3DCompute(hm, verticalResolution, computeShader);
+        }
+        else
+        {
+            float[] heights = MakeSDF.ExtractHeightmap(hm);
+            sdfImage = MakeSDF.BuildSDF3D(heights, hm.width, verticalResolution, hm.height);
+        }
         sdfMaterial.SetVector(Shader.PropertyToID("_minPointCube"), hm2D.MinPoint);
         sdfMaterial.SetVector(Shader.PropertyToID("_maxPointCube"), hm2D.MaxPoint);
         sdfMaterial.SetTexture(Shader.PropertyToID("_sdfMap"), sdfImage.Image);

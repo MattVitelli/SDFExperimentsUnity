@@ -1,15 +1,13 @@
 ﻿// Upgrade NOTE: replaced '_Object2World' with 'unity_ObjectToWorld'
 // Upgrade NOTE: replaced '_World2Object' with 'unity_WorldToObject'
 
-Shader "Custom/MyShader"
+Shader "SDF/LitWithSDF"
 {
 	Properties
 	{
 		_minPointCube ("MinCube", Vector) = (0,0,0,0)
 		_maxPointCube ("MaxCube", Vector) = (1,1,1,1)
-		_heightMap ("Height Image", 2D) = "white" {}
 		_sdfMap("SDF Image", 3D) = "blue" {}
-		_encodingRange("Encoding Range", Vector) = (0,0,0,0)
 		_invDims("Inverse Dimensions", Vector) = (0,0,0,0)
 		_lightDir("Light Direction", Vector) = (1,1,1,0)
 		_shadowCoeff("Shadow Softness", Float) = 32
@@ -19,6 +17,8 @@ Shader "Custom/MyShader"
 		_ambientStrength("Ambient Strength", Float) = 0.5
 		_skyColor("Sky Color", Color) = (1,1,1,1)
 		_directColor("Direct Color", Color) = (1,1,1,1)
+			_biasAmount("SDF Bias", Range(1,10)) = 1
+			_sliceIndex("Slice Index", Range(0,1)) = 0.5
 	}
 	SubShader
 	{
@@ -51,6 +51,7 @@ Shader "Custom/MyShader"
 				float3 cubeUV : TEXCOORD3;
 				float3 normal : TEXCOORD4;
 			};
+			uniform float _sliceIndex;
 
 			uniform sampler2D _heightMap;
 			uniform sampler3D _sdfMap;
@@ -67,16 +68,13 @@ Shader "Custom/MyShader"
 			uniform float _directStrength;
 			uniform float4 _directColor;
 			uniform float _ambientStrength;
-			#define _SampleCountGI 256
+			uniform float _biasAmount;
+			#define _SampleCountGI 128
 
 			float sampleSDF(float3 wp)
 			{
 				float4 samp = tex3D(_sdfMap, wp);
 				return samp.x;
-				
-				//float result = dot(samp, float4(1.0, 1 / 255.0, 1 / 65025.0, 1 / 160581375.0));
-				//result = result * _encodingRange.y + _encodingRange.x;
-				//return result;
 			}
 			
 			v2f vert (appdata v)
@@ -89,7 +87,8 @@ Shader "Custom/MyShader"
 				float3 toCamera = normalize(worldPos.xyz - _WorldSpaceCameraPos.xyz);
 				o.rayDir = mul(unity_WorldToObject, float4(toCamera,0)).xyz;
 				o.rayO = mul(unity_WorldToObject, float4(_WorldSpaceCameraPos.xyz, 1)).xyz;
-				o.cubeUV = (worldPos - _minPointCube) / max(_maxPointCube - _minPointCube, 1.0e-3);
+				o.cubeUV = (worldPos - _minPointCube) / (_maxPointCube - _minPointCube);
+				//o.cubeUV = 1.0 - o.cubeUV;
 				o.normal = normalize(mul(unity_ObjectToWorld, float4(v.normal, 0)).xyz);
 				return o;
 			}
@@ -229,9 +228,11 @@ Shader "Custom/MyShader"
 			{
 				float2 uv = i.uv;
 				float3 N = i.normal;
-				float3 uv3 = i.cubeUV +N * _invDims;
+				float3 uv3 = i.cubeUV + N * _biasAmount * _invDims;
 				float3 L = -normalize(_lightDir.xyz);
 				float4 col = worldLighting(uv3, N, L);
+				//col.rgb = lerp(tex3D(_sdfMap, uv3), uv3, _sliceIndex);
+				//return sampleSDF(uv3 + float3(0, _sliceIndex, 0));
 				return col;
 			}
 			ENDCG

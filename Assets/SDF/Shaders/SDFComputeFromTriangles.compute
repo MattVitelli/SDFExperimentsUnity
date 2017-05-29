@@ -1,0 +1,127 @@
+﻿// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel SDFInit
+
+Texture2D<float4> _vertexMap0; //a 2D texture where each pixel stores a vertex + n.x
+Texture2D<float4> _vertexMap1; //a 2D texture where each pixel stores a vertex + n.y
+Texture2D<float4> _vertexMap2; //a 2D texture where each pixel stores a vertex + n.z
+//For a particular index i=(x,y)
+//we can sample v0 = _vertexMap0[i].xyz, v1=_vertexMap1[i].xyz, v2=_vertexMap2[i].xyz
+//and the face normal N = (_vertexMap0[i].w,_vertexMap1[i].w,_vertexMap2[i].w)
+//note that the face normal is unnormalized, as the point-to-triangle distance function
+//requires it
+//Using the vertices and the normals, we can compute the SDF in a brute-force way
+//This might seem inefficient, but it's actually orders of magnitude faster than
+//any of the CPU implementations - particularly for arbitrary meshes
+//it's also pretty sweet because the number of triangles you can compute is directly
+//related to the number of pixels in each image. e.g. if you have a 4096x4096 image, you can encode
+// 4096x4096=16777216 faces! And unlike rasterization-based methods, this is 100% accurate in terms of the resulting SDF
+// Compute Shaders FTW!
+
+//We also store the size of each map, as well as the total number of triangles
+//In practice, we'll always have slightly more pixels in the triangle map than
+//needed, so it's important for us to know when to stop iterating
+uniform int _triMapWidth;
+uniform int _triMapHeight;
+uniform int _numTriangles;
+
+//Rendering volume textures is a real pain in the ass.
+//Instead, we render into a 2D texture and use some clever modulo division tricks
+//to convert it into a proper volume texture at the end
+//Our fragment shaders will still use the 3D volume texture, but we pay a very small price at the beginning of the algorithm
+//to compute the cell indices
+RWTexture2D<float4> _SDF; 
+
+//The dimensions of our volume texture
+uniform int _width;
+uniform int _height;
+uniform int _depth;
+
+//The size of the 2D render target we're rendering into
+uniform int _texWidth;
+uniform int _texHeight;
+
+uniform float _infinity; //The floating-point representation of infinity
+
+//We sample the SDF as an axis-aligned box
+//These values correspond to the min and max values of that box
+uniform float3 _minBounds;
+uniform float3 _maxBounds;
+
+float dot2(in float3 v) { return dot(v, v); }
+
+[numthreads(32,32,1)]
+void SDFInit(uint3 id : SV_DispatchThreadID)
+{
+	//compute the stride in the image
+	uint texIdx = id.x + id.y * _texWidth;
+	//convert the stride into 3D indices using the modulo trick
+	//Side note - we could do this to compute indices in an arbitrary N-dimensional space
+	//This is just a special case of the formula where N = 3
+	uint3 cellIdx = uint3(texIdx % _width, (texIdx / _width) % _height, (texIdx / (_width * _height)));
+	if (texIdx > _width*_height*_depth) //If we're out of bounds, just ignore - these values get skipped in the later copy stage anyway
+	{
+		_SDF[id.xy] = 0;
+	}
+	else
+	{
+		float3 invRecip = 1.0 / float3(_width-1, _height-1, _depth-1);
+		//cell indices range from 0 to 1 inclusively
+		float3 cellIdxNormalized = float3(cellIdx) * invRecip;
+		//Convert the cell index to world-space
+
+		//Lies - keep them in cube space
+		float3 cellIdxWS = cellIdxNormalized;// lerp(_minBounds, _maxBounds, cellIdxNormalized);
+		//There's a discrepency between the 3D texture sampler's coordinate system and 
+		//the triangle coordinate system. Specifically, the x and z axes need to be flipped
+		//cellIdxWS.z = 1.0 - cellIdxWS.z;  
+
+		float minDist = 1000;// _infinity;
+		float distSign = 1;
+		int2 triIdx = 0;
+		int triStride = 0;
+		//Note - we could also use a spatial data structure to accelerate this,
+		//but brute-force will probably be ok for now
+		for (triIdx.y = 0, triStride = 0; triStride < _numTriangles; triIdx.y++)
+		{
+			for (triIdx.x = 0; triIdx.x < _triMapWidth; triIdx.x++, triStride++)
+			{
+				float4 t0 = _vertexMap0[triIdx];
+				float4 t1 = _vertexMap1[triIdx];
+				float4 t2 = _vertexMap2[triIdx];
+
+				float3 v1 = t0.xyz;
+				float3 v2 = t1.xyz;
+				float3 v3 = t2.xyz;
+				//float3 nor = float3(t0.w, t1.w, t2.w);
+
+				//TODO - the following can be precomputed:
+				//v21, v32, v13
+				//cross(v21, nor), cross(v32, nor), cross(v13, nor)
+				//dot2(v21), dot2(v32), dot2(v13), dot2(nor)
+
+				float3 v21 = v2 - v1; float3 p1 = cellIdxWS - v1;
+				float3 v32 = v3 - v2; float3 p2 = cellIdxWS - v2;
+				float3 v13 = v1 - v3; float3 p3 = cellIdxWS - v3;
+				float3 nor = cross(v21, v13);
+		
+				//Apply the triangle distance function
+				//It's important that this runs as fast as possible!
+				//This uses http://www.iquilezles.org/www/articles/triangledistance/triangledistance.htm
+				float d = (sign(dot(cross(v21, nor), p1)) +	sign(dot(cross(v32, nor), p2)) + sign(dot(cross(v13, nor), p3)) < 2.0)
+					?
+					// 3 edges    
+					min(min(
+						dot2(v21*clamp(dot(v21, p1) / dot2(v21), 0.0, 1.0) - p1),
+						dot2(v32*clamp(dot(v32, p2) / dot2(v32), 0.0, 1.0) - p2)),
+						dot2(v13*clamp(dot(v13, p3) / dot2(v13), 0.0, 1.0) - p3))
+					:
+					// 1 face
+					dot(nor, p1)*dot(nor, p1) / dot2(nor);
+
+					minDist = min(minDist, d);
+			}
+		}
+		
+		_SDF[id.xy] = sqrt(minDist);// *distSign;
+	}
+}
